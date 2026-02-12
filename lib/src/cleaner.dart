@@ -3,7 +3,10 @@ import 'dart:io';
 import 'package:yaml/yaml.dart';
 
 /// Scans the project for unused localization keys and removes them from `.arb` files.
-void runLocalizationCleaner({bool keepUnused = false}) {
+void runLocalizationCleaner({
+  bool keepUnused = false,
+  List<String>? customSourceDirs,
+}) {
   final File yamlFile = File('l10n.yaml'); // Path to the l10n.yaml file
   if (!yamlFile.existsSync()) {
     print('✅ Error: l10n.yaml file not found!');
@@ -48,37 +51,49 @@ void runLocalizationCleaner({bool keepUnused = false}) {
   }
 
   final Set<String> usedKeys = <String>{};
-  final Directory libDir = Directory('lib');
+  
+  // Use custom source directories or default to 'lib'
+  final List<String> sourceDirs = customSourceDirs ?? ['lib'];
 
   // Reg Exp to detect localization keys
   final String keysPattern = allKeys.map(RegExp.escape).join('|');
   final RegExp regex = RegExp(
     r'(?:' // Start non-capturing group for all possible access patterns
-            r'(?:[a-zA-Z0-9_]+\.)+' // e.g., `_appLocalizations.` or `cubit.appLocalizations.`
+            r'\(?\s*(?:[a-zA-Z0-9_]+\.)+' // e.g., `_appLocalizations.` or `(_appLocalizations.` with optional opening parenthesis
             r'|'
-            r'[a-zA-Z0-9_]+\.of\(\s*(?:context|AppNavigation\.context|this\.context|BuildContext\s+\w+)\s*\)\!?\s*\.\s*' // `of(context)!.key` with optional whitespace
+            r'\(?\s*[a-zA-Z0-9_]+\.of\(\s*(?:context|AppNavigation\.context|this\.context|BuildContext\s+\w+)\s*,?\s*\)[\!\?]?\s*\)?\s*\.\s*' // `(AppLocalizations.of(context,)!)` with optional wrapping parentheses and null-aware or force unwrap operator
             r'|'
-            r'[a-zA-Z0-9_]+\.\w+\(\s*\)\s*\.\s*' // `SomeClass.method().key`
+            r'\(?\s*[a-zA-Z0-9_]+\.\w+\(\s*\)\s*\)?\s*\.\s*' // `(SomeClass.method())` with optional parentheses
             r')'
             r'(' +
         keysPattern +
-        r')\b', // The actual key
+        r')(?:\b|\()', // The actual key followed by word boundary OR opening parenthesis for function calls
     multiLine: true,
     dotAll: true, // Makes `.` match newlines (crucial for multi-line cases)
   );
 
-  // Scan Dart files for key usage
-  for (final FileSystemEntity file in libDir.listSync(recursive: true)) {
-    if (file is File &&
-        file.path.endsWith('.dart') &&
-        !excludedFiles.contains(file.path)) {
-      final String content = file.readAsStringSync();
+  // Scan configured source directories for key usage
+  for (final String sourceDirPath in sourceDirs) {
+    final Directory sourceDir = Directory(sourceDirPath);
+    if (!sourceDir.existsSync()) {
+      print('⚠️ Warning: Source directory "$sourceDirPath" does not exist, skipping...');
+      continue;
+    }
+    
+    print('🔍 Scanning directory: $sourceDirPath');
+    
+    for (final FileSystemEntity file in sourceDir.listSync(recursive: true)) {
+      if (file is File &&
+          file.path.endsWith('.dart') &&
+          !excludedFiles.contains(file.path)) {
+        final String content = file.readAsStringSync();
 
-      // Quick pre-check: skip files that don't contain any key substring
-      if (!content.contains(RegExp(keysPattern))) continue;
+        // Quick pre-check: skip files that don't contain any key substring
+        if (!content.contains(RegExp(keysPattern))) continue;
 
-      for (final Match match in regex.allMatches(content)) {
-        usedKeys.add(match.group(1)!); // Capture only the key
+        for (final Match match in regex.allMatches(content)) {
+          usedKeys.add(match.group(1)!); // Capture only the key
+        }
       }
     }
   }
